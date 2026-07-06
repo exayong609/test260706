@@ -405,8 +405,10 @@ function TicketsPanel({
 
       <div className="filters">
         <label>
-          <Filter size={15} />
-          状态
+          <span className="field-label">
+            <Filter size={15} />
+            状态
+          </span>
           <select value={filters.status || "ALL"} onChange={(event) => onFilter({ status: event.target.value as TicketListQuery["status"] })}>
             {statusOptions.map((item) => (
               <option key={item} value={item}>
@@ -416,7 +418,7 @@ function TicketsPanel({
           </select>
         </label>
         <label>
-          类型
+          <span className="field-label">类型</span>
           <select value={filters.exceptionClass || "ALL"} onChange={(event) => onFilter({ exceptionClass: event.target.value as ExceptionClass | "ALL" })}>
             <option value="ALL">全部</option>
             <option value="LOGISTICS">物流异常</option>
@@ -424,7 +426,7 @@ function TicketsPanel({
           </select>
         </label>
         <label>
-          运单号
+          <span className="field-label">运单号</span>
           <input value={filters.waybillNo || ""} onChange={(event) => onFilter({ waybillNo: event.target.value })} placeholder="JT2026070001" />
         </label>
       </div>
@@ -563,10 +565,12 @@ function ScanPanel({
             扫描数量
             <input type="number" value={form.scannedQty} onChange={(event) => setForm({ ...form, scannedQty: Number(event.target.value) })} />
           </label>
-          <label>
-            破损等级
-            <input type="range" min="0" max="4" value={form.damageLevel} onChange={(event) => setForm({ ...form, damageLevel: Number(event.target.value) })} />
-            <span className="range-value">{form.damageLevel}</span>
+          <label className="range-field">
+            <span className="field-label">破损等级</span>
+            <span className="range-control">
+              <input type="range" min="0" max="4" value={form.damageLevel} onChange={(event) => setForm({ ...form, damageLevel: Number(event.target.value) })} />
+              <span className="range-value">{form.damageLevel}</span>
+            </span>
           </label>
           <label>
             规格偏差 mm
@@ -583,8 +587,11 @@ function ScanPanel({
             </select>
           </label>
           <label className="toggle">
+            <span className="field-label">标签可识别</span>
+            <span className="checkbox-control">
             <input type="checkbox" checked={form.labelReadable} onChange={(event) => setForm({ ...form, labelReadable: event.target.checked })} />
-            标签可识别
+              <span>{form.labelReadable ? "是" : "否"}</span>
+            </span>
           </label>
           <label className="wide">
             异常描述
