@@ -31,7 +31,7 @@ CRON_SECRET=optional-cron-secret
 2. 在 Vercel 新建独立项目，选择该仓库。
 3. 配置 `DATABASE_URL`、`V2_API_BASE_URL`、`V2_API_KEY`、`NEXT_PUBLIC_APP_URL`。
 4. Build Command 使用 `npm run build`，Install Command 使用 `npm install`。
-5. 可选：在 Vercel Cron 中定时请求 `/api/jobs/run`，Vercel 会使用 `Authorization: Bearer ${CRON_SECRET}`；手动调用也可带 `x-cron-secret: CRON_SECRET`，触发超时流转和禁用审批人转交。
+5. 可选：在 Vercel Cron 中定时请求 `/api/jobs/run`，Vercel Hobby 账号配置为每日一次；Pro 账号可调高频率。Vercel 会使用 `Authorization: Bearer ${CRON_SECRET}`；手动调用也可带 `x-cron-secret: CRON_SECRET`，触发超时流转和禁用审批人转交。
 
 ## 评分点对应
 
