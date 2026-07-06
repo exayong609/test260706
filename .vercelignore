@@ -3,5 +3,6 @@ node_modules
 .npm-cache
 .tmp
 .git
+.vercel
 *.tsbuildinfo
 npm-debug.log*
