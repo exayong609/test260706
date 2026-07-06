@@ -102,6 +102,10 @@ function severityClass(severity: Ticket["severity"]) {
   return severity === "CRITICAL" || severity === "HIGH" ? "danger" : severity === "MEDIUM" ? "warn" : "ok";
 }
 
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" });
+}
+
 export function Dashboard({ initialData }: { initialData: InitialData }) {
   const [tickets, setTickets] = useState(initialData.tickets);
   const [users] = useState(initialData.users);
@@ -459,7 +463,7 @@ function TicketsPanel({
                 <td>{userName(users, ticket.currentAssigneeId)}</td>
                 <td>
                   {overdue(ticket) ? <AlertTriangle size={15} className="danger-icon" /> : <Clock size={15} />}
-                  {new Date(ticket.dueAt).toLocaleString("zh-CN", { hour12: false })}
+                  {formatDateTime(ticket.dueAt)}
                 </td>
                 <td>
                   <button className="icon-button" title="查看详情" onClick={() => onOpen(ticket.id)}>
@@ -884,7 +888,7 @@ function MonitorPanel({
                 <td>{log.success ? "成功" : `失败 ${log.statusCode || ""}`}</td>
                 <td>{log.durationMs}ms</td>
                 <td>{log.error || "-"}</td>
-                <td>{new Date(log.createdAt).toLocaleString("zh-CN", { hour12: false })}</td>
+                <td>{formatDateTime(log.createdAt)}</td>
               </tr>
             ))}
           </tbody>
@@ -993,7 +997,7 @@ function DetailDrawer({
         <span>金额</span><strong>{centsToYuan(ticket.amountCents)}</strong>
         <span>上报人</span><strong>{userName(users, ticket.reporterId)}</strong>
         <span>当前处理人</span><strong>{userName(users, ticket.currentAssigneeId)}</strong>
-        <span>运单数据来源</span><strong>{ticket.waybillSource === "V2_REALTIME" ? "实时获取自 V2" : `本地缓存，同步于 ${new Date(ticket.sourceSyncAt).toLocaleString("zh-CN", { hour12: false })}`}</strong>
+        <span>运单数据来源</span><strong>{ticket.waybillSource === "V2_REALTIME" ? "实时获取自 V2" : `本地缓存，同步于 ${formatDateTime(ticket.sourceSyncAt)}`}</strong>
       </div>
 
       {ticket.aiSuggestion ? (
@@ -1068,7 +1072,7 @@ function DetailDrawer({
             <div>
               <strong>{item.result} · {userName(users, item.operatorId)}</strong>
               <p>{statusLabels[item.beforeStatus]} → {statusLabels[item.afterStatus]}：{item.comment}</p>
-              <small>{new Date(item.createdAt).toLocaleString("zh-CN", { hour12: false })}</small>
+              <small>{formatDateTime(item.createdAt)}</small>
             </div>
           </div>
         ))}
