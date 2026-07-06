@@ -12,7 +12,7 @@ import type {
   WaybillSnapshot
 } from "./types";
 import { exceptionLabels } from "./types";
-import { addHours, addMinutes, id, isOpenStatus, normalizeText, nowIso } from "./utils";
+import { addHours, id, isOpenStatus, normalizeText, nowIso } from "./utils";
 import { V2ClientError, fetchWaybillFromV2, validateSkuFromV2 } from "./v2-client";
 import { writeState } from "./store";
 
@@ -45,7 +45,7 @@ function chooseApprover(state: AppState, level: 1 | 2, tenantId: string, warehou
   const role = level === 1 ? "LEVEL1_APPROVER" : "LEVEL2_APPROVER";
   const fallbackId = level === 1 ? state.settings.level1FallbackUserId : state.settings.level2FallbackUserId;
   return (
-    state.users.find((item) => item.id === fallbackId && item.active) ??
+    state.users.find((item) => item.id === fallbackId && item.active && canAccess(item, tenantId, warehouseId)) ??
     state.users.find((item) => item.role === role && item.active && item.tenantId === tenantId && item.warehouseId === warehouseId) ??
     state.users.find((item) => item.role === "ADMIN" && item.active)
   );
@@ -63,6 +63,17 @@ function approvalRuleForAmount(state: AppState, amountCents: number) {
     throw new DomainError("没有可用的分级审批规则，请先配置金额阈值", 422);
   }
   return rule;
+}
+
+function timeoutHoursForLevel(state: AppState, level: 1 | 2) {
+  const configured = state.approvalRules
+    .filter((item) => item.enabled && item.requiredLevel === level)
+    .sort((left, right) => left.minAmountCents - right.minAmountCents)[0]?.timeoutHours;
+  return configured ?? (level === 1 ? 8 : 16);
+}
+
+function approvalDueAt(state: AppState, level: 1 | 2) {
+  return addHours(new Date(), timeoutHoursForLevel(state, level)).toISOString();
 }
 
 function pushLogs(state: AppState, logs: AppState["interfaceLogs"]) {
@@ -189,7 +200,7 @@ export async function createManualTicket(input: {
       currentAssigneeId: assignee?.id,
       retryCount: 0,
       version: 1,
-      dueAt: addHours(new Date(), 8).toISOString(),
+      dueAt: approvalDueAt(state, 1),
       sourceSyncAt: waybill.syncedAt,
       waybillSource: waybill.source,
       createdAt,
@@ -264,6 +275,18 @@ function findOpenQcTicket(state: AppState, waybillNo: string, sku: string, batch
   );
 }
 
+function findOpenQcTicketByBatch(state: AppState, sku: string, batchNo: string, tenantId: string, warehouseId: string) {
+  return state.tickets.find(
+    (item) =>
+      item.source === "SCAN" &&
+      item.sku === sku &&
+      item.batchNo === batchNo &&
+      item.tenantId === tenantId &&
+      item.warehouseId === warehouseId &&
+      isOpenStatus(item.status)
+  );
+}
+
 export async function scanWaybill(input: {
   waybillNo: string;
   sku: string;
@@ -309,12 +332,18 @@ export async function scanWaybill(input: {
     };
     const evaluation = evaluateQualityRules(state.qualityRules, metrics);
     const existing = findOpenQcTicket(state, waybill.waybillNo, input.sku, batchNo);
+    const heldByAnotherTicket = findOpenQcTicketByBatch(state, input.sku, batchNo, waybill.tenantId, waybill.warehouseId);
+    if (heldByAnotherTicket && heldByAnotherTicket.waybillNo !== waybill.waybillNo) {
+      throw new DomainError(`SKU ${input.sku} 批次 ${batchNo} 已被 ${heldByAnotherTicket.ticketNo} 品控暂扣，其他运单不可引用。`, 409);
+    }
     const createdAt = nowIso();
     let ticket = existing;
     let idempotentMessage: string | undefined;
     let inventory = inventoryFor(state, waybill, input.sku, batchNo);
 
-    if (evaluation.result === "ABNORMAL") {
+    if (evaluation.result === "ABNORMAL" && evaluation.rule?.autoCreateTicket === false) {
+      idempotentMessage = `命中规则 ${evaluation.rule.name}，但规则未启用自动建单；已记录异常扫描，等待人工复核。`;
+    } else if (evaluation.result === "ABNORMAL") {
       if (existing) {
         idempotentMessage = `该批次已存在未关闭品控工单：${existing.ticketNo}，本次只追加扫描记录。`;
       } else {
@@ -340,7 +369,7 @@ export async function scanWaybill(input: {
           currentAssigneeId: assignee?.id,
           retryCount: 0,
           version: 1,
-          dueAt: addHours(new Date(), rule?.targetApprovalLevel === 1 ? 8 : 16).toISOString(),
+          dueAt: approvalDueAt(state, rule?.targetApprovalLevel === 1 ? 1 : 2),
           sourceSyncAt: waybill.syncedAt,
           waybillSource: waybill.source,
           createdAt,
@@ -354,6 +383,8 @@ export async function scanWaybill(input: {
         inventory.lockStatus = "QC_HOLD";
         inventory.updatedAt = createdAt;
       }
+    } else if (existing) {
+      idempotentMessage = `该批次仍处于 ${existing.ticketNo} 品控暂扣中，本次只追加复扫记录，不自动解锁。`;
     }
 
     const scan: ScanRecord = {
@@ -373,7 +404,7 @@ export async function scanWaybill(input: {
       exceptionDescription: normalizeText(input.description),
       matchedRuleId: evaluation.rule?.id,
       ruleTrace: evaluation.trace,
-      batchLockStatus: evaluation.result === "ABNORMAL" ? "QC_HOLD" : "AVAILABLE",
+      batchLockStatus: ticket ? "QC_HOLD" : "AVAILABLE",
       ticketId: ticket?.id,
       createdAt
     };
@@ -446,9 +477,11 @@ function executeLinkedActions(state: AppState, ticket: Ticket, approval: Approva
     );
     if (inventory) {
       if (ticket.exceptionClass === "QUALITY") {
-        inventory.lockedQty = Math.max(0, inventory.lockedQty - 1);
+        const scanQty = Math.max(1, ...state.scans.filter((item) => item.ticketId === ticket.id).map((item) => item.expectedQty));
+        const affectedQty = inventory.lockTicketId === ticket.id ? inventory.lockedQty : scanQty;
+        inventory.lockedQty = Math.max(0, inventory.lockedQty - affectedQty);
         if (action === "RELEASE_AFTER_RELABEL") {
-          inventory.availableQty += 1;
+          inventory.availableQty += affectedQty;
           inventory.lockStatus = "RELEASED";
         } else if (action === "RETURN_SUPPLIER_RECOVERY") {
           inventory.lockStatus = "RETURNED";
@@ -468,7 +501,14 @@ function executeLinkedActions(state: AppState, ticket: Ticket, approval: Approva
         id: id("move"),
         sku: ticket.sku,
         batchNo: ticket.batchNo,
-        changeQty: action === "RETURN_INBOUND" || action === "RELEASE_AFTER_RELABEL" ? 1 : -1,
+        changeQty:
+          ticket.exceptionClass === "QUALITY"
+            ? action === "RELEASE_AFTER_RELABEL"
+              ? Math.max(1, ...state.scans.filter((item) => item.ticketId === ticket.id).map((item) => item.expectedQty))
+              : -Math.max(1, ...state.scans.filter((item) => item.ticketId === ticket.id).map((item) => item.expectedQty))
+            : action === "RETURN_INBOUND"
+              ? 1
+              : -1,
         reason: action,
         ticketId: ticket.id,
         approvalRecordId: approval.id,
@@ -478,7 +518,12 @@ function executeLinkedActions(state: AppState, ticket: Ticket, approval: Approva
   }
 
   for (const scan of state.scans.filter((item) => item.ticketId === ticket.id)) {
-    scan.batchLockStatus = "RELEASED";
+    scan.batchLockStatus =
+      ticket.exceptionClass === "QUALITY" && action === "RETURN_SUPPLIER_RECOVERY"
+        ? "RETURNED"
+        : ticket.exceptionClass === "QUALITY" && action === "REPURCHASE_RECOVERY"
+          ? "SCRAPPED"
+          : "RELEASED";
   }
 }
 
@@ -494,7 +539,9 @@ export async function approveTicket(input: {
     const user = getUser(state, input.operatorId);
     const ticket = state.tickets.find((item) => item.id === input.ticketId);
     if (!ticket) throw new DomainError("工单不存在", 404);
-    const existingApproval = state.approvals.find((item) => item.idempotencyKey === input.idempotencyKey);
+    const existingApproval = state.approvals.find(
+      (item) => item.ticketId === input.ticketId && item.idempotencyKey === input.idempotencyKey
+    );
     if (existingApproval) {
       return { ticket, approval: existingApproval, idempotent: true };
     }
@@ -520,7 +567,7 @@ export async function approveTicket(input: {
     } else if (expectedLevel === 1 && ticket.requiredLevel === 2) {
       after = "LEVEL2_REVIEW";
       ticket.currentAssigneeId = chooseApprover(state, 2, ticket.tenantId, ticket.warehouseId)?.id;
-      ticket.dueAt = addHours(new Date(), 16).toISOString();
+      ticket.dueAt = approvalDueAt(state, 2);
     } else {
       after = "COMPLETED";
       ticket.currentAssigneeId = undefined;
@@ -569,7 +616,7 @@ export async function resubmitTicket(input: { ticketId: string; reporterId: stri
     ticket.currentAssigneeId = chooseApprover(state, 1, ticket.tenantId, ticket.warehouseId)?.id;
     ticket.version += 1;
     ticket.updatedAt = nowIso();
-    ticket.dueAt = addHours(new Date(), 8).toISOString();
+    ticket.dueAt = approvalDueAt(state, 1);
     const approval: ApprovalRecord = {
       id: id("apv"),
       ticketId: ticket.id,
@@ -674,7 +721,7 @@ export async function runBackgroundJobs() {
         } else {
           ticket.status = "LEVEL2_REVIEW";
           ticket.currentAssigneeId = chooseApprover(state, 2, ticket.tenantId, ticket.warehouseId)?.id;
-          ticket.dueAt = addHours(new Date(), 16).toISOString();
+          ticket.dueAt = approvalDueAt(state, 2);
         }
         ticket.version += 1;
         ticket.updatedAt = nowIso();
@@ -702,7 +749,7 @@ export async function runBackgroundJobs() {
         const before = ticket.status;
         ticket.status = "LEVEL2_REVIEW";
         ticket.currentAssigneeId = chooseApprover(state, 2, ticket.tenantId, ticket.warehouseId)?.id;
-        ticket.dueAt = addMinutes(new Date(), state.settings.qcHoldTimeoutMinutes).toISOString();
+        ticket.dueAt = approvalDueAt(state, 2);
         ticket.version += 1;
         ticket.updatedAt = nowIso();
         state.approvals.push({

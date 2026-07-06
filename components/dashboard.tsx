@@ -7,12 +7,17 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  ClipboardCheck,
   FileSearch,
+  FileText,
   Filter,
+  Gauge,
   History,
   Loader2,
   LockKeyhole,
+  PackageCheck,
   Play,
+  RadioTower,
   RefreshCcw,
   RotateCcw,
   Save,
@@ -38,7 +43,7 @@ import type {
   WaybillSnapshot
 } from "@/lib/types";
 import { exceptionLabels, roleLabels, statusLabels } from "@/lib/types";
-import { centsToYuan, id } from "@/lib/utils";
+import { centsToYuan } from "@/lib/utils";
 
 type InitialData = {
   tickets: ReturnType<typeof import("@/lib/domain").listTicketsFromState>;
@@ -152,8 +157,73 @@ export function Dashboard({ initialData }: { initialData: InitialData }) {
   }, [selected, users]);
 
   return (
-    <div className="workspace">
-      <nav className="tabs" aria-label="功能模块">
+    <main className="app-frame">
+      <aside className="app-nav" aria-label="鲸天系统导航">
+        <div className="nav-brand">
+          <span className="brand-mark">JT</span>
+          <div>
+            <strong>鲸天系统</strong>
+            <small>运单 V3</small>
+          </div>
+        </div>
+        <div className="nav-group">
+          <span>全流程管理</span>
+          <button className={`nav-item ${activeTab === "tickets" ? "active" : ""}`} onClick={() => setActiveTab("tickets")}>异常审批</button>
+          <button className={`nav-item ${activeTab === "scan" ? "active" : ""}`} onClick={() => setActiveTab("scan")}>扫描品控</button>
+          <button className={`nav-item ${activeTab === "report" ? "active" : ""}`} onClick={() => setActiveTab("report")}>异常上报</button>
+          <button className={`nav-item ${activeTab === "rules" ? "active" : ""}`} onClick={() => setActiveTab("rules")}>规则配置</button>
+          <button className={`nav-item ${activeTab === "monitor" ? "active" : ""}`} onClick={() => setActiveTab("monitor")}>接口监控</button>
+        </div>
+      </aside>
+
+      <section className="app-shell">
+        <header className="topbar">
+          <div>
+            <div className="brand-line">
+              <span className="brand-dot" />
+              <span>中通冷链 · 鲸天系统 V3</span>
+            </div>
+            <h1>运单全流程管理</h1>
+            <p>录单同步、扫描品控、异常上报、分级审批、赔付与库存联动</p>
+          </div>
+          <div className="topbar-actions">
+            <span className="system-chip">生产环境 · Vercel</span>
+            <a className="icon-link" href="/docs/assumptions.md" target="_blank" rel="noreferrer">
+              <FileText size={17} />
+              假设说明
+            </a>
+            <a className="icon-link" href="/docs/api-contract.md" target="_blank" rel="noreferrer">
+              <RadioTower size={17} />
+              接口文档
+            </a>
+          </div>
+        </header>
+
+        <section className="metric-strip" aria-label="系统概览">
+          <div className="metric">
+            <Gauge size={20} />
+            <span>开放工单</span>
+            <strong>{tickets.stats.open}</strong>
+          </div>
+          <div className="metric">
+            <ScanLine size={20} />
+            <span>品控工单</span>
+            <strong>{tickets.stats.quality}</strong>
+          </div>
+          <div className="metric">
+            <PackageCheck size={20} />
+            <span>锁定库存</span>
+            <strong>{initialData.inventoryLocked}</strong>
+          </div>
+          <div className="metric">
+            <ClipboardCheck size={20} />
+            <span>赔付/追偿</span>
+            <strong>{centsToYuan(initialData.compensationAmount)}</strong>
+          </div>
+        </section>
+
+        <div className="workspace">
+          <nav className="module-switcher" aria-label="功能模块">
         <button className={activeTab === "tickets" ? "active" : ""} onClick={() => setActiveTab("tickets")}>
           <FileSearch size={17} />
           工单追踪
@@ -294,7 +364,9 @@ export function Dashboard({ initialData }: { initialData: InitialData }) {
           showError={showError}
         />
       ) : null}
-    </div>
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -857,7 +929,7 @@ function DetailDrawer({
           result,
           comment,
           expectedVersion: ticket.version,
-          idempotencyKey: id("ui")
+          idempotencyKey: `ui-${ticket.id}-${ticket.version}-${result}`
         })
       });
       await onChanged(result === "APPROVE" ? "审批通过，联动已在同一事务中完成。" : "工单已驳回，等待上报人重提。");
@@ -936,6 +1008,10 @@ function DetailDrawer({
       ) : null}
 
       <div className="action-box">
+        <div className="permission-note">
+          <LockKeyhole size={15} />
+          <span>后端按角色、租户/仓库、当前审批层级和自批自核规则校验；切换操作人可验证无权限提示。</span>
+        </div>
         <label>
           操作人
           <select value={operatorId} onChange={(event) => setOperatorId(event.target.value)}>
@@ -998,6 +1074,20 @@ function DetailDrawer({
         ))}
         {ticket.approvals.length === 0 ? <p className="empty">暂无审批记录。</p> : null}
       </div>
+
+      {ticket.scans.length ? (
+        <>
+          <h3 className="subhead">扫描批次追踪</h3>
+          <div className="compact-list">
+            {ticket.scans.map((scan) => (
+              <p key={scan.id}>
+                {scan.scanId} · {scan.sku}/{scan.batchNo} · {scan.qcResult === "ABNORMAL" ? "品控异常" : "复扫通过"} · 批次状态 {scan.batchLockStatus}
+                <small>{scan.ruleTrace}</small>
+              </p>
+            ))}
+          </div>
+        </>
+      ) : null}
 
       <h3 className="subhead">执行联动</h3>
       <div className="compact-list">
